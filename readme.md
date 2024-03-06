@@ -6,9 +6,9 @@
 
 <div align="center">
 
-# gensokyo
+# gensokyo-broadcast
 
-_✨ 基于 [OneBot](https://github.com/howmanybots/onebot/blob/master/README.md) QQ官方机器人Api Golang 原生实现 ✨_  
+_✨ 基于 [OneBot](https://github.com/howmanybots/onebot/blob/master/README.md) Onebotv11广播命令行工具 ✨_  
 
 
 </div>
