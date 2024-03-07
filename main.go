@@ -27,6 +27,7 @@ type CommandLineArgs struct {
 	ChanceToSend   int
 	Help           bool
 	SaveFilePath   string
+	FilterChannel  bool
 }
 
 type GroupList struct {
@@ -77,6 +78,7 @@ func parseArgs() CommandLineArgs {
 	flag.IntVar(&args.ChanceToSend, "c", 100, "每个群推送的概率（%百分比）")
 	flag.BoolVar(&args.Help, "h", false, "显示帮助信息")
 	flag.StringVar(&args.SaveFilePath, "s", "", "读取-save文件路径")
+	flag.BoolVar(&args.FilterChannel, "g", false, "gensokyo过滤子频道")
 	flag.Parse()
 
 	// 保存命令行参数到.bat文件
@@ -101,6 +103,7 @@ func main() {
 		fmt.Println("-d  *每条信息推送时间间隔（秒）。示例: -d 15, 默认为10秒。")
 		fmt.Println("-c  *每个群推送的概率（百分比）。示例: -c 50, 默认为100%，即总是推送。")
 		fmt.Println("-h  *显示帮助信息。不需要值，仅标志存在即可。")
+		fmt.Println("-g  *QQ开放平台频道智能选择,ture=每个频道首个文字子频道广播,false=全部子频道都发送广播")
 		return
 	}
 	var groupIDs []int64
@@ -109,7 +112,7 @@ func main() {
 	// 根据提供的参数执行不同的逻辑
 	if args.GroupListFile == "" {
 		// 从API获取群列表并保存
-		groupIDs, filename, err = fetchAndSaveGroupList(args.ApiAddress, args.SaveFilePath)
+		groupIDs, filename, err = fetchAndSaveGroupList(args.ApiAddress, args.SaveFilePath, args.FilterChannel)
 		if err != nil {
 			log.Fatalf("Failed to read group list from file: %v", err)
 		}
@@ -172,7 +175,7 @@ func sendGroupMessage(apiURL string, groupID int64, userID int64, message string
 }
 
 // 定义从HTTP API获取群列表并保存的函数，返回群列表和可能的错误
-func fetchAndSaveGroupList(apiURL string, SaveFilePath string) ([]int64, string, error) {
+func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool) ([]int64, string, error) {
 	// 构建获取群列表的URL
 	url := apiURL + "/get_group_list"
 
@@ -209,15 +212,43 @@ func fetchAndSaveGroupList(apiURL string, SaveFilePath string) ([]int64, string,
 
 	// 准备收集群ID
 	var groupIDs []int64
-
-	// 写入群ID到文件并收集群ID
-	for _, group := range groupList.Data {
-		_, err := file.WriteString(strconv.FormatInt(group.GroupID, 10) + "\n")
-		if err != nil {
-			log.Printf("Failed to write to file: %v", err)
-			return nil, "", err
+	if !isgensokyo {
+		// 写入群ID到文件并收集群ID
+		for _, group := range groupList.Data {
+			_, err := file.WriteString(strconv.FormatInt(group.GroupID, 10) + "\n")
+			if err != nil {
+				log.Printf("Failed to write to file: %v", err)
+				return nil, "", err
+			}
+			groupIDs = append(groupIDs, group.GroupID)
 		}
-		groupIDs = append(groupIDs, group.GroupID)
+	} else {
+		// 特殊逻辑
+		lookingForSubChannel := false // 用于标记是否正在寻找首个子频道
+
+		for _, group := range groupList.Data {
+			// 检查GroupName是否为空，如果为空，直接加入
+			if group.GroupName == "" {
+				groupIDs = append(groupIDs, group.GroupID)
+				log.Printf("GroupName为空，已添加GroupID：%d", group.GroupID)
+				lookingForSubChannel = false // 重置标记
+				continue
+			}
+
+			if strings.HasPrefix(group.GroupName, "*") {
+				// 如果GroupName以*开头，开始寻找以&开头的首个子频道
+				log.Printf("检测到频道，GroupID: %d, 频道名称: %s", group.GroupID, group.GroupName)
+				lookingForSubChannel = true // 设置标记为true
+			} else if lookingForSubChannel {
+				// 仅当我们正在寻找首个子频道，并且GroupName以&开头时，才处理
+				if strings.HasPrefix(group.GroupName, "&") {
+					groupIDs = append(groupIDs, group.GroupID)
+					log.Printf("检测到首个子频道GroupID: %d, 子频道名称: %s", group.GroupID, group.GroupName)
+					lookingForSubChannel = false // 找到后重置标记
+				}
+			}
+			// 如果不是以上任一情况，则继续循环
+		}
 	}
 
 	log.Printf("Group list saved to %s\n", filename)
