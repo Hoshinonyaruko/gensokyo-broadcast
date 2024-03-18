@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/hoshinonyaruko/gensokyo-broadcast/txt"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 type CommandLineArgs struct {
@@ -55,12 +57,46 @@ func saveArgsToBatFile(args CommandLineArgs) {
 		return // 如果SaveFilePath为空，则不执行任何操作
 	}
 
-	// 构建命令行参数字符串
-	cmdLine := fmt.Sprintf("qf -a %s -w \"%s\" -p %s -d %d -c %d -s %s\n",
-		args.ApiAddress, args.MessageContent, args.GroupListFile, args.DelaySeconds, args.ChanceToSend, args.SaveFilePath)
+	// 开始构建命令行字符串
+	var cmdLine strings.Builder
+	//cmdLine.WriteString("@echo off\n") // 关闭命令回显
 
-	// 将命令行参数写入到.bat文件中
-	err := os.WriteFile(batFilename, []byte(cmdLine), 0644)
+	cmdLine.WriteString("qf")
+
+	// 构建命令行参数字符串
+	if args.ApiAddress != "" {
+		cmdLine.WriteString(fmt.Sprintf(" -a %s", args.ApiAddress))
+	}
+	if args.MessageContent != "" {
+		cmdLine.WriteString(fmt.Sprintf(" -w \"%s\"", args.MessageContent))
+	}
+	if args.GroupListFile != "" {
+		cmdLine.WriteString(fmt.Sprintf(" -p %s", args.GroupListFile))
+	}
+	if args.FilterChannel {
+		cmdLine.WriteString(" -g")
+	}
+	if args.DelaySeconds > 0 {
+		cmdLine.WriteString(fmt.Sprintf(" -d %d", args.DelaySeconds))
+	}
+	if args.ChanceToSend > 0 {
+		cmdLine.WriteString(fmt.Sprintf(" -c %d", args.ChanceToSend))
+	}
+	if args.SaveFilePath != "" {
+		cmdLine.WriteString(fmt.Sprintf(" -s %s", args.SaveFilePath))
+	}
+	cmdLine.WriteString("\n")
+
+	// 将命令行参数以GBK编码写入到.bat文件中
+	file, err := os.Create(batFilename)
+	if err != nil {
+		log.Printf("Failed to create .bat file '%s': %v\n", batFilename, err)
+		return
+	}
+	defer file.Close()
+
+	writer := transform.NewWriter(file, simplifiedchinese.GBK.NewEncoder())
+	_, err = writer.Write([]byte(cmdLine.String()))
 	if err != nil {
 		log.Printf("Failed to write to .bat file '%s': %v\n", batFilename, err)
 	} else {
@@ -103,7 +139,7 @@ func main() {
 		fmt.Println("-d  *每条信息推送时间间隔（秒）。示例: -d 15, 默认为10秒。")
 		fmt.Println("-c  *每个群推送的概率（百分比）。示例: -c 50, 默认为100%，即总是推送。")
 		fmt.Println("-h  *显示帮助信息。不需要值，仅标志存在即可。")
-		fmt.Println("-g  *QQ开放平台频道智能选择,ture=每个频道首个文字子频道广播,false=全部子频道都发送广播")
+		fmt.Println("-g  *QQ开放平台频道智能选择,ture=每个频道首个文字子频道广播,false=全部子频道都发送广播,不需要值，仅标志存在即可。")
 		return
 	}
 	var groupIDs []int64
@@ -230,8 +266,13 @@ func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool) 
 			// 检查GroupName是否为空，如果为空，直接加入
 			if group.GroupName == "" {
 				groupIDs = append(groupIDs, group.GroupID)
-				log.Printf("GroupName为空，已添加GroupID：%d", group.GroupID)
+				//log.Printf("GroupName为空，已添加GroupID：%d", group.GroupID)
 				lookingForSubChannel = false // 重置标记
+				_, err := file.WriteString(strconv.FormatInt(group.GroupID, 10) + "\n")
+				if err != nil {
+					log.Printf("Failed to write to file: %v", err)
+					return nil, "", err
+				}
 				continue
 			}
 
@@ -245,6 +286,11 @@ func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool) 
 					groupIDs = append(groupIDs, group.GroupID)
 					log.Printf("检测到首个子频道GroupID: %d, 子频道名称: %s", group.GroupID, group.GroupName)
 					lookingForSubChannel = false // 找到后重置标记
+					_, err := file.WriteString(strconv.FormatInt(group.GroupID, 10) + "\n")
+					if err != nil {
+						log.Printf("Failed to write to file: %v", err)
+						return nil, "", err
+					}
 				}
 			}
 			// 如果不是以上任一情况，则继续循环
