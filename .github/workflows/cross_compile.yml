@@ -92,8 +92,8 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v2
       with:
-        name: gb${{ matrix.os }}-${{ matrix.goarch }}
-        path: output/gb${{ matrix.os }}-${{ matrix.goarch }}${{ endsWith(matrix.os, 'windows') && '.exe' || '' }}
+        name: gb-${{ matrix.os }}-${{ matrix.goarch }}
+        path: output/gb-${{ matrix.os }}-${{ matrix.goarch }}${{ endsWith(matrix.os, 'windows') && '.exe' || '' }}
 
   prepare_release:
     needs: build
