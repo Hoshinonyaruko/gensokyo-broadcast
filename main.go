@@ -175,13 +175,23 @@ func main() {
 }
 
 func sendGroupMessage(apiURL string, groupID int64, userID int64, message string) (string, error) {
-	// 构建完整的URL
-	url := fmt.Sprintf("%s/send_group_msg", apiURL)
+	// 首先替换\n和%0A为占位符
+	placeholder := "\xFF\xFE"
+	message = strings.Replace(message, "\n", placeholder, -1)
+	message = strings.Replace(message, "\\n", placeholder, -1)
+	message = strings.Replace(message, "%0A", placeholder, -1)
+
+	// 然后将字符串转换为字节切片
+	byteMessage := []byte(message)
+
+	// 替换占位符为真正的换行符字节序列（CRLF）
+	crlf := []byte{13, 10}
+	byteMessage = bytes.ReplaceAll(byteMessage, []byte(placeholder), crlf)
 
 	// 构造请求体
 	requestBody, err := json.Marshal(map[string]interface{}{
 		"group_id": groupID,
-		"message":  message,
+		"message":  string(byteMessage),
 		"user_id":  userID,
 	})
 	if err != nil {
@@ -189,7 +199,7 @@ func sendGroupMessage(apiURL string, groupID int64, userID int64, message string
 	}
 
 	// 发送POST请求
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(requestBody))
+	resp, err := http.Post(apiURL+"/send_group_msg", "application/json", bytes.NewBuffer(requestBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to send POST request: %w", err)
 	}
