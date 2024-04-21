@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -30,6 +31,8 @@ type CommandLineArgs struct {
 	Help           bool
 	SaveFilePath   string
 	FilterChannel  bool
+	FriendMode     bool
+	Token          string
 }
 
 type GroupList struct {
@@ -40,6 +43,20 @@ type GroupList struct {
 	Echo    interface{} `json:"echo"`
 }
 
+type FriendList struct {
+	Data    []FriendData `json:"data"`
+	Message string       `json:"message"`
+	RetCode int          `json:"retcode"`
+	Status  string       `json:"status"`
+	Echo    interface{}  `json:"echo"`
+}
+
+type FriendData struct {
+	Nickname string `json:"nickname"`
+	Remark   string `json:"remark"`
+	UserID   string `json:"user_id"`
+}
+
 type Group struct {
 	GroupCreateTime int32  `json:"group_create_time"`
 	GroupID         int64  `json:"group_id"`
@@ -48,6 +65,16 @@ type Group struct {
 	GroupName       string `json:"group_name"`
 	MaxMemberCount  int32  `json:"max_member_count"`
 	MemberCount     int32  `json:"member_count"`
+}
+
+// getExecutableName 返回当前执行文件的名称
+func getExecutableName() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	exeName := filepath.Base(exePath)
+	return exeName, nil
 }
 
 func saveArgsToBatFile(args CommandLineArgs) {
@@ -61,7 +88,13 @@ func saveArgsToBatFile(args CommandLineArgs) {
 	var cmdLine strings.Builder
 	//cmdLine.WriteString("@echo off\n") // 关闭命令回显
 
-	cmdLine.WriteString("qf")
+	exeName, err := getExecutableName()
+	if err != nil {
+		fmt.Println("Error getting executable name:", err)
+		return
+	}
+
+	cmdLine.WriteString(exeName)
 
 	// 构建命令行参数字符串
 	if args.ApiAddress != "" {
@@ -76,6 +109,9 @@ func saveArgsToBatFile(args CommandLineArgs) {
 	if args.FilterChannel {
 		cmdLine.WriteString(" -g")
 	}
+	if args.FriendMode {
+		cmdLine.WriteString(" -f")
+	}
 	if args.DelaySeconds > 0 {
 		cmdLine.WriteString(fmt.Sprintf(" -d %d", args.DelaySeconds))
 	}
@@ -84,6 +120,9 @@ func saveArgsToBatFile(args CommandLineArgs) {
 	}
 	if args.SaveFilePath != "" {
 		cmdLine.WriteString(fmt.Sprintf(" -s %s", args.SaveFilePath))
+	}
+	if args.Token != "" {
+		cmdLine.WriteString(fmt.Sprintf(" -t %s", args.Token))
 	}
 	cmdLine.WriteString("\n")
 
@@ -115,6 +154,8 @@ func parseArgs() CommandLineArgs {
 	flag.BoolVar(&args.Help, "h", false, "显示帮助信息")
 	flag.StringVar(&args.SaveFilePath, "s", "", "读取-save文件路径")
 	flag.BoolVar(&args.FilterChannel, "g", false, "gensokyo过滤子频道")
+	flag.BoolVar(&args.FriendMode, "f", false, "私聊模式")
+	flag.StringVar(&args.Token, "t", "", "access_token")
 	flag.Parse()
 
 	// 保存命令行参数到.bat文件
@@ -140,6 +181,8 @@ func main() {
 		fmt.Println("-c  *每个群推送的概率（百分比）。示例: -c 50, 默认为100%，即总是推送。")
 		fmt.Println("-h  *显示帮助信息。不需要值，仅标志存在即可。")
 		fmt.Println("-g  *QQ开放平台频道智能选择,ture=每个频道首个文字子频道广播,false=全部子频道都发送广播,不需要值，仅标志存在即可。")
+		fmt.Println("-f  *私聊模式,仅限发送通知,不要发送骚扰信息。请遵守调用限制.")
+		fmt.Println("-t  *access_token,如果你设置了http的密钥则需要这个参数.")
 		return
 	}
 	var groupIDs []int64
@@ -148,9 +191,16 @@ func main() {
 	// 根据提供的参数执行不同的逻辑
 	if args.GroupListFile == "" {
 		// 从API获取群列表并保存
-		groupIDs, filename, err = fetchAndSaveGroupList(args.ApiAddress, args.SaveFilePath, args.FilterChannel)
-		if err != nil {
-			log.Fatalf("Failed to read group list from file: %v", err)
+		if !args.FriendMode {
+			groupIDs, filename, err = fetchAndSaveGroupList(args.ApiAddress, args.SaveFilePath, args.FilterChannel, args.Token)
+			if err != nil {
+				log.Fatalf("Failed to read group list from file: %v", err)
+			}
+		} else {
+			groupIDs, filename, err = fetchAndSaveFriendList(args.ApiAddress, args.SaveFilePath, args.Token)
+			if err != nil {
+				log.Fatalf("Failed to read group list from file: %v", err)
+			}
 		}
 	} else if args.GroupListFile != "" {
 		// 从文件读取群列表
@@ -159,7 +209,7 @@ func main() {
 			log.Fatalf("Failed to read group list from file: %v", err)
 		}
 		// 输出从文件读取到的群号数量
-		fmt.Printf("从文件%s读取了群列表,%d个群\n", args.GroupListFile, len(groupIDs))
+		fmt.Printf("从文件%s读取了群列表,%d个群或好友\n", args.GroupListFile, len(groupIDs))
 	}
 	// 处理消息内容
 	message, err := handleMessageContent(ts, args.MessageContent)
@@ -167,14 +217,14 @@ func main() {
 		log.Fatalf("Error handling message content: %v", err)
 	}
 	// 发送消息并更新保存文件
-	err = sendMessageAndUpdateSaveFile(ts, filename, args.ApiAddress, groupIDs, message, args.DelaySeconds, args.ChanceToSend, args.SaveFilePath)
+	err = sendMessageAndUpdateSaveFile(ts, filename, args.ApiAddress, groupIDs, message, args.DelaySeconds, args.ChanceToSend, args.SaveFilePath, args.FriendMode, args.Token)
 	if err != nil {
 		log.Fatalf("Error sending messages: %v", err)
 	}
 
 }
 
-func sendGroupMessage(apiURL string, groupID int64, userID int64, message string) (string, error) {
+func sendGroupMessage(apiURL string, groupID int64, userID int64, message string, token string) (string, error) {
 	// 首先替换\n和%0A为占位符
 	placeholder := "\xFF\xFE"
 	message = strings.Replace(message, "\n", placeholder, -1)
@@ -198,8 +248,60 @@ func sendGroupMessage(apiURL string, groupID int64, userID int64, message string
 		return "", fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
+	baseurl := apiURL + "/send_group_msg"
+	if token != "" {
+		baseurl += "?access_token=" + token
+	}
 	// 发送POST请求
-	resp, err := http.Post(apiURL+"/send_group_msg", "application/json", bytes.NewBuffer(requestBody))
+	resp, err := http.Post(baseurl, "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to send POST request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	responseContent := string(responseBody)
+
+	// 检查响应状态
+	if resp.StatusCode != http.StatusOK {
+		return responseContent, fmt.Errorf("received non-OK response status: %s", resp.Status)
+	}
+
+	return responseContent, nil
+}
+
+func sendPrivateMessage(apiURL string, userID int64, message string, token string) (string, error) {
+	// 首先替换\n和%0A为占位符
+	placeholder := "\xFF\xFE"
+	message = strings.Replace(message, "\n", placeholder, -1)
+	message = strings.Replace(message, "\\n", placeholder, -1)
+	message = strings.Replace(message, "%0A", placeholder, -1)
+
+	// 然后将字符串转换为字节切片
+	byteMessage := []byte(message)
+
+	// 替换占位符为真正的换行符字节序列（CRLF）
+	crlf := []byte{13, 10}
+	byteMessage = bytes.ReplaceAll(byteMessage, []byte(placeholder), crlf)
+
+	// 构造请求体
+	requestBody, err := json.Marshal(map[string]interface{}{
+		"message": string(byteMessage),
+		"user_id": userID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request body: %w", err)
+	}
+	baseurl := apiURL + "/send_private_msg"
+	if token != "" {
+		baseurl += "?access_token=" + token
+	}
+	// 发送POST请求
+	resp, err := http.Post(baseurl, "application/json", bytes.NewBuffer(requestBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to send POST request: %w", err)
 	}
@@ -221,9 +323,12 @@ func sendGroupMessage(apiURL string, groupID int64, userID int64, message string
 }
 
 // 定义从HTTP API获取群列表并保存的函数，返回群列表和可能的错误
-func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool) ([]int64, string, error) {
+func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool, token string) ([]int64, string, error) {
 	// 构建获取群列表的URL
 	url := apiURL + "/get_group_list"
+	if token != "" {
+		url += "?access_token=" + token
+	}
 
 	// 发送HTTP GET请求
 	resp, err := http.Get(url)
@@ -312,6 +417,64 @@ func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool) 
 	return groupIDs, filename, nil // 返回群ID数组和nil表示没有错误
 }
 
+// 定义从HTTP API获取好友列表并保存的函数，返回群列表和可能的错误
+func fetchAndSaveFriendList(apiURL string, SaveFilePath string, token string) ([]int64, string, error) {
+	// 构建获取群列表的URL
+	url := apiURL + "/get_friend_list"
+	if token != "" {
+		url += "?access_token=" + token
+	}
+
+	// 发送HTTP GET请求
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("Failed to fetch group list: %v", err)
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read response body: %v", err)
+		return nil, "", err
+	}
+
+	// 解析JSON到结构体
+	var groupList FriendList
+	if err := json.Unmarshal(body, &groupList); err != nil {
+		log.Printf("Failed to unmarshal JSON: %v", err)
+		return nil, "", err
+	}
+
+	// 创建文件以保存群列表
+	filename := fmt.Sprintf("%d-%s.txt", time.Now().Unix(), SaveFilePath)
+	file, err := os.Create(filename)
+	if err != nil {
+		log.Printf("Failed to create file: %v", err)
+		return nil, "", err
+	}
+	defer file.Close()
+
+	// 准备收集群ID
+	var FriendIDs []int64
+
+	// 写入群ID到文件并收集群ID
+	for _, friend := range groupList.Data {
+		_, err := file.WriteString(friend.UserID + "\n")
+		if err != nil {
+			log.Printf("Failed to write to file: %v", err)
+			return nil, "", err
+		}
+		friendid64, _ := strconv.ParseInt(friend.UserID, 10, 64)
+		FriendIDs = append(FriendIDs, friendid64)
+	}
+
+	log.Printf("Friends list saved to %s\n", filename)
+
+	return FriendIDs, filename, nil // 返回群ID数组和nil表示没有错误
+}
+
 // 假设ts是你的单例对象，且GetFileContent方法返回一个包含文件每行内容的字符串数组和一个错误
 func readGroupListFromTS(ts *txt.TxtStore, filename string) ([]int64, error) {
 	// 从ts单例获取文件内容
@@ -363,9 +526,9 @@ func handleMessageContent(ts *txt.TxtStore, content string) ([]string, error) {
 	}
 }
 
-func sendMessageAndUpdateSaveFile(ts *txt.TxtStore, filename string, apiURL string, groupIDs []int64, messages []string, delay int, chance int, saveFile string) error {
+func sendMessageAndUpdateSaveFile(ts *txt.TxtStore, filename string, apiURL string, groupIDs []int64, messages []string, delay int, chance int, saveFile string, isfriend bool, token string) error {
 	progressFilename := saveFile
-	fmt.Printf("执行发送任务,目标%d个群\n", len(groupIDs))
+	fmt.Printf("执行发送任务,目标%d个群或好友\n", len(groupIDs))
 	for _, groupID := range groupIDs {
 		// 检查是否已有发送记录
 		sent, err := hasSendRecord(ts, progressFilename, groupID)
@@ -380,17 +543,28 @@ func sendMessageAndUpdateSaveFile(ts *txt.TxtStore, filename string, apiURL stri
 		// 随机选择一个消息发送
 		message := messages[rand.Intn(len(messages))]
 
+		var sendResult string
 		// 根据概率决定是否发送
 		if rand.Intn(100) < chance {
-
-			// 调用API发送消息
-			sendResult, err := sendGroupMessage(apiURL, groupID, 0, message) // UserID设置为0
-			if err != nil {
-				log.Printf("Failed to send message to group %d: %v\n", groupID, err)
-				sendResult = "失败: " + err.Error() // 记录失败状态
+			if !isfriend {
+				// 调用API发送消息
+				sendResult, err = sendGroupMessage(apiURL, groupID, 0, message, token) // UserID设置为0
+				if err != nil {
+					log.Printf("Failed to send message to group %d: %v\n", groupID, err)
+					sendResult = "失败: " + err.Error() // 记录失败状态
+				}
+				// 在发送后输出目标群和消息内容
+				fmt.Printf("正在向群号为%d的群发送消息: %s\n", groupID, message)
+			} else {
+				// 调用API发送消息
+				sendResult, err = sendPrivateMessage(apiURL, groupID, message, token) // 这里的groupID是UserID
+				if err != nil {
+					log.Printf("Failed to send message to friends %d: %v\n", groupID, err)
+					sendResult = "失败: " + err.Error() // 记录失败状态
+				}
+				// 在发送后输出目标群和消息内容
+				fmt.Printf("正在向ID号为%d的用户发送私聊消息: %s\n", groupID, message)
 			}
-			// 在发送后输出目标群和消息内容
-			fmt.Printf("正在向群号为%d的群发送消息: %s\n", groupID, message)
 			fmt.Printf("发送状态: %s\n", sendResult)
 
 			// 记录到保存文件
