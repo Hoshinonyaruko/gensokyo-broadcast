@@ -11,13 +11,19 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/hoshinonyaruko/gensokyo-broadcast/config"
+	"github.com/hoshinonyaruko/gensokyo-broadcast/sys"
 	"github.com/hoshinonyaruko/gensokyo-broadcast/txt"
+	"github.com/hoshinonyaruko/gensokyo-broadcast/webui"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
@@ -33,6 +39,7 @@ type CommandLineArgs struct {
 	FilterChannel  bool
 	FriendMode     bool
 	Token          string
+	RandomList     bool
 }
 
 type GroupList struct {
@@ -124,6 +131,9 @@ func saveArgsToBatFile(args CommandLineArgs) {
 	if args.Token != "" {
 		cmdLine.WriteString(fmt.Sprintf(" -t %s", args.Token))
 	}
+	if args.RandomList {
+		cmdLine.WriteString(" -r")
+	}
 	cmdLine.WriteString("\n")
 
 	// 将命令行参数以GBK编码写入到.bat文件中
@@ -156,6 +166,7 @@ func parseArgs() CommandLineArgs {
 	flag.BoolVar(&args.FilterChannel, "g", false, "gensokyo过滤子频道")
 	flag.BoolVar(&args.FriendMode, "f", false, "私聊模式")
 	flag.StringVar(&args.Token, "t", "", "access_token")
+	flag.BoolVar(&args.RandomList, "r", false, "打乱群/好友列表顺序")
 	flag.Parse()
 
 	// 保存命令行参数到.bat文件
@@ -166,25 +177,111 @@ func parseArgs() CommandLineArgs {
 
 // 主函数
 func main() {
+	if len(os.Args) == 1 {
+		// 读取或创建配置
+		jsonconfig := config.ReadConfig()
+
+		//cookie数据库
+		webui.InitializeDB()
+
+		//给程序整个标题
+		sys.SetTitle(jsonconfig.Title + " 作者 早苗狐 答疑群:196173384")
+
+		// 没有命令行参数，启动Web UI
+		startWebServer(jsonconfig)
+
+		// 设置信号捕获
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+		// 等待信号
+		<-sigChan
+		// 可以执行退出程序
+		// 正常退出程序
+		os.Exit(0)
+	} else {
+		// 有命令行参数，执行原有逻辑
+		runCommandLineLogic()
+	}
+}
+
+func startWebServer(jsonconfig config.Config) {
+
+	r := gin.Default()
+
+	//webui和它的api
+	webuiGroup := r.Group("/webui")
+	{
+		webuiGroup.GET("/*filepath", webui.CombinedMiddleware(jsonconfig))
+		webuiGroup.POST("/*filepath", webui.CombinedMiddleware(jsonconfig))
+		webuiGroup.PUT("/*filepath", webui.CombinedMiddleware(jsonconfig))
+		webuiGroup.DELETE("/*filepath", webui.CombinedMiddleware(jsonconfig))
+		webuiGroup.PATCH("/*filepath", webui.CombinedMiddleware(jsonconfig))
+	}
+
+	// 创建一个http.Server实例(主服务器)
+	httpServer := &http.Server{
+		Addr:    "0.0.0.0:" + jsonconfig.Port,
+		Handler: r,
+	}
+
+	if jsonconfig.UseHttps {
+		fmt.Printf("webui-api运行在 HTTPS 端口 %v\n", jsonconfig.Port)
+		// 在一个新的goroutine中启动主服务器
+		go func() {
+			// 定义默认的证书和密钥文件名 自签名证书
+			certFile := "cert.pem"
+			keyFile := "key.pem"
+			if jsonconfig.Cert != "" && jsonconfig.Key != "" {
+				certFile = jsonconfig.Cert
+				keyFile = jsonconfig.Key
+			}
+			// 使用 HTTPS
+			if err := httpServer.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("listen: %s\n", err)
+			}
+
+		}()
+	} else {
+		fmt.Printf("webui-api运行在 HTTP 端口 %v\n", jsonconfig.Port)
+		// 在一个新的goroutine中启动主服务器
+		go func() {
+			// 使用HTTP
+			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("listen: %s\n", err)
+			}
+		}()
+	}
+	fmt.Printf("快捷访问:http://127.0.0.1:" + jsonconfig.Port + "/webui")
+}
+
+func runCommandLineLogic() {
 	ts := txt.GetInstance()
-
 	args := parseArgs()
-
-	// -h参数，显示帮助信息
 	if args.Help {
-		fmt.Println("命令行参数说明：")
-		fmt.Println("-a  HTTP API 的地址。示例: -a http://localhost:8080")
-		fmt.Println("-p  指定群列表的txt文件名(不包括.txt后缀)。示例: -p group_list")
-		fmt.Println("-w  要发送的信息内容。如果包含.txt则尝试从对应的txt文件中读取内容。示例: -w message.txt 或 -w '这是一条消息'||'这是另一条消息'")
-		fmt.Println("-s  必须,存档名,指定-save文件路径,用于断点续发。示例: -s 本次任务代号,指定新文件代表从头开始任务。不需要加-save和后缀。")
-		fmt.Println("-d  *每条信息推送时间间隔（秒）。示例: -d 15, 默认为10秒。")
-		fmt.Println("-c  *每个群推送的概率（百分比）。示例: -c 50, 默认为100%，即总是推送。")
-		fmt.Println("-h  *显示帮助信息。不需要值，仅标志存在即可。")
-		fmt.Println("-g  *QQ开放平台频道智能选择,ture=每个频道首个文字子频道广播,false=全部子频道都发送广播,不需要值，仅标志存在即可。")
-		fmt.Println("-f  *私聊模式,仅限发送通知,不要发送骚扰信息。请遵守调用限制.")
-		fmt.Println("-t  *access_token,如果你设置了http的密钥则需要这个参数.")
+		showHelp()
 		return
 	}
+	executeTaskBasedOnArgs(ts, args)
+}
+
+func showHelp() {
+	fmt.Println("命令行参数说明：")
+	fmt.Println("-a  HTTP API 的地址。示例: -a http://localhost:8080")
+	fmt.Println("-p  指定群列表的txt文件名(不包括.txt后缀)。示例: -p group_list")
+	fmt.Println("-w  要发送的信息内容。如果包含.txt则尝试从对应的txt文件中读取内容。示例: -w message.txt 或 -w '这是一条消息'||'这是另一条消息'")
+	fmt.Println("-s  必须,存档名,指定-save文件路径,用于断点续发。示例: -s 本次任务代号,指定新文件代表从头开始任务。不需要加-save和后缀。")
+	fmt.Println("-d  *每条信息推送时间间隔（秒）。示例: -d 15, 默认为10秒。")
+	fmt.Println("-c  *每个群推送的概率（百分比）。示例: -c 50, 默认为100%，即总是推送。")
+	fmt.Println("-h  *显示帮助信息。不需要值，仅标志存在即可。")
+	fmt.Println("-g  *QQ开放平台频道智能选择,ture=每个频道首个文字子频道广播,false=全部子频道都发送广播,不需要值，仅标志存在即可。")
+	fmt.Println("-f  *私聊模式,仅限发送通知,不要发送骚扰信息。请遵守调用限制.")
+	fmt.Println("-t  *access_token,如果你设置了http的密钥则需要这个参数.")
+	fmt.Println("-r  *打乱群和好友列表的顺序.")
+}
+
+func executeTaskBasedOnArgs(ts *txt.TxtStore, args CommandLineArgs) {
+	// 根据参数执行逻辑
 	var groupIDs []int64
 	var err error
 	var filename string
@@ -192,19 +289,19 @@ func main() {
 	if args.GroupListFile == "" {
 		// 从API获取群列表并保存
 		if !args.FriendMode {
-			groupIDs, filename, err = fetchAndSaveGroupList(args.ApiAddress, args.SaveFilePath, args.FilterChannel, args.Token)
+			groupIDs, filename, err = fetchAndSaveGroupList(args.ApiAddress, args.SaveFilePath, args.FilterChannel, args.Token, args.RandomList)
 			if err != nil {
 				log.Fatalf("Failed to read group list from file: %v", err)
 			}
 		} else {
-			groupIDs, filename, err = fetchAndSaveFriendList(args.ApiAddress, args.SaveFilePath, args.Token)
+			groupIDs, filename, err = fetchAndSaveFriendList(args.ApiAddress, args.SaveFilePath, args.Token, args.RandomList)
 			if err != nil {
 				log.Fatalf("Failed to read group list from file: %v", err)
 			}
 		}
 	} else if args.GroupListFile != "" {
 		// 从文件读取群列表
-		groupIDs, err = readGroupListFromTS(ts, args.GroupListFile)
+		groupIDs, err = readGroupListFromTS(ts, args.GroupListFile, args.RandomList)
 		if err != nil {
 			log.Fatalf("Failed to read group list from file: %v", err)
 		}
@@ -221,7 +318,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error sending messages: %v", err)
 	}
-
 }
 
 func sendGroupMessage(apiURL string, groupID int64, userID int64, message string, token string) (string, error) {
@@ -322,8 +418,42 @@ func sendPrivateMessage(apiURL string, userID int64, message string, token strin
 	return responseContent, nil
 }
 
+func parseAndPossiblyRandomize(body []byte, randomlist bool) (*GroupList, error) {
+	var groupList GroupList
+	if err := json.Unmarshal(body, &groupList); err != nil {
+		log.Printf("Failed to unmarshal JSON: %v", err)
+		return nil, err
+	}
+
+	// 如果 randomlist 为 true，则打乱 Data 数组
+	if randomlist {
+		rand.Shuffle(len(groupList.Data), func(i, j int) {
+			groupList.Data[i], groupList.Data[j] = groupList.Data[j], groupList.Data[i]
+		})
+	}
+
+	return &groupList, nil
+}
+
+func parseAndPossiblyRandomizeFriends(body []byte, randomlist bool) (*FriendList, error) {
+	var groupList FriendList
+	if err := json.Unmarshal(body, &groupList); err != nil {
+		log.Printf("Failed to unmarshal JSON: %v", err)
+		return nil, err
+	}
+
+	// 如果 randomlist 为 true，则打乱 Data 数组
+	if randomlist {
+		rand.Shuffle(len(groupList.Data), func(i, j int) {
+			groupList.Data[i], groupList.Data[j] = groupList.Data[j], groupList.Data[i]
+		})
+	}
+
+	return &groupList, nil
+}
+
 // 定义从HTTP API获取群列表并保存的函数，返回群列表和可能的错误
-func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool, token string) ([]int64, string, error) {
+func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool, token string, randomlist bool) ([]int64, string, error) {
 	// 构建获取群列表的URL
 	url := apiURL + "/get_group_list"
 	if token != "" {
@@ -346,10 +476,11 @@ func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool, 
 	}
 
 	// 解析JSON到结构体
-	var groupList GroupList
-	if err := json.Unmarshal(body, &groupList); err != nil {
-		log.Printf("Failed to unmarshal JSON: %v", err)
-		return nil, "", err
+	groupList, err := parseAndPossiblyRandomize(body, randomlist)
+	if err != nil {
+		log.Println("Error processing JSON:", err)
+	} else {
+		log.Printf("Processed group list: %+v", groupList)
 	}
 
 	// 创建文件以保存群列表
@@ -418,7 +549,7 @@ func fetchAndSaveGroupList(apiURL string, SaveFilePath string, isgensokyo bool, 
 }
 
 // 定义从HTTP API获取好友列表并保存的函数，返回群列表和可能的错误
-func fetchAndSaveFriendList(apiURL string, SaveFilePath string, token string) ([]int64, string, error) {
+func fetchAndSaveFriendList(apiURL string, SaveFilePath string, token string, randomlist bool) ([]int64, string, error) {
 	// 构建获取群列表的URL
 	url := apiURL + "/get_friend_list"
 	if token != "" {
@@ -441,10 +572,11 @@ func fetchAndSaveFriendList(apiURL string, SaveFilePath string, token string) ([
 	}
 
 	// 解析JSON到结构体
-	var groupList FriendList
-	if err := json.Unmarshal(body, &groupList); err != nil {
-		log.Printf("Failed to unmarshal JSON: %v", err)
-		return nil, "", err
+	groupList, err := parseAndPossiblyRandomizeFriends(body, randomlist)
+	if err != nil {
+		log.Println("Error processing JSON:", err)
+	} else {
+		log.Printf("Processed group list: %+v", groupList)
 	}
 
 	// 创建文件以保存群列表
@@ -475,9 +607,10 @@ func fetchAndSaveFriendList(apiURL string, SaveFilePath string, token string) ([
 	return FriendIDs, filename, nil // 返回群ID数组和nil表示没有错误
 }
 
-// 假设ts是你的单例对象，且GetFileContent方法返回一个包含文件每行内容的字符串数组和一个错误
-func readGroupListFromTS(ts *txt.TxtStore, filename string) ([]int64, error) {
-	// 从ts单例获取文件内容
+// ts是txt单例对象，且GetFileContent方法返回一个包含文件每行内容的字符串数组和一个错误
+// readGroupListFromTS 从文本存储中读取群列表，并根据 randomlist 决定是否随机打乱
+func readGroupListFromTS(ts *txt.TxtStore, filename string, randomlist bool) ([]int64, error) {
+	// 从 ts 单例获取文件内容
 	lines, err := ts.GetFileContent(filename)
 	if err != nil {
 		log.Println("Error:", err)
@@ -496,6 +629,13 @@ func readGroupListFromTS(ts *txt.TxtStore, filename string) ([]int64, error) {
 			continue
 		}
 		groupIDs = append(groupIDs, groupID)
+	}
+
+	// 如果 randomlist 为 true，则打乱 groupIDs 列表
+	if randomlist {
+		rand.Shuffle(len(groupIDs), func(i, j int) {
+			groupIDs[i], groupIDs[j] = groupIDs[j], groupIDs[i]
+		})
 	}
 
 	return groupIDs, nil
