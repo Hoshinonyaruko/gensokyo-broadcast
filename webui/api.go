@@ -57,6 +57,11 @@ func CombinedMiddleware(config config.Config) gin.HandlerFunc {
 				handleListFiles(c)
 				return
 			}
+			// 处理 /api/new-save 路由的请求
+			if c.Param("filepath") == "/api/new-save" && c.Request.Method == http.MethodPost {
+				handleCreateSaveFile(c)
+				return
+			}
 
 		} else {
 			// 否则，处理静态文件请求
@@ -201,13 +206,15 @@ func handleRunCommand(c *gin.Context) {
 	for key, values := range params {
 		if len(values) > 0 {
 			for _, val := range values {
-				if val == "true" && (key == "g" || key == "f" || key == "r") {
-					// 对于布尔型参数，如果值为"true"，只添加参数名
-					args = append(args, fmt.Sprintf("-%s", key))
-					break // 仅需要添加一次参数名
-				} else {
-					// 否则添加参数名和参数值
-					args = append(args, fmt.Sprintf("-%s", key), val)
+				if val != "" { // 确保 val 不为空
+					if val == "true" && (key == "g" || key == "f" || key == "r") {
+						// 对于布尔型参数，如果值为"true"，只添加参数名
+						args = append(args, fmt.Sprintf("-%s", key))
+						break // 仅需要添加一次参数名
+					} else {
+						// 否则添加参数名和参数值
+						args = append(args, fmt.Sprintf("-%s", key), val)
+					}
 				}
 			}
 		}
@@ -224,6 +231,59 @@ func handleRunCommand(c *gin.Context) {
 
 	// 响应成功启动的信息
 	c.JSON(200, gin.H{"message": "Process started successfully"})
+}
+
+// handleCreateSaveFile 处理 /new-save 路由的请求
+func handleCreateSaveFile(c *gin.Context) {
+	// 从请求中获取cookie
+	cookieValue, err := c.Cookie("login_cookie")
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Cookie not provided"})
+		return
+	}
+
+	// 使用ValidateCookie函数验证cookie
+	isValid, err := ValidateCookie(cookieValue)
+	if err != nil || !isValid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid cookie"})
+		return
+	}
+
+	// 从请求的body中获取参数b（假设参数以JSON形式发送）
+	var requestBody struct {
+		Filename string `json:"filename"`
+	}
+	if err := c.BindJSON(&requestBody); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Bad request"})
+		return
+	}
+
+	// 检查filename是否提供
+	if requestBody.Filename == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Filename is required"})
+		return
+	}
+
+	// 创建文件名添加 "-save.txt"
+	saveFileName := fmt.Sprintf("%s-save.txt", requestBody.Filename)
+	executablePath, err := os.Executable()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not determine executable path"})
+		return
+	}
+	dirPath := filepath.Dir(executablePath)
+
+	// 创建文件
+	filePath := filepath.Join(dirPath, saveFileName)
+	file, err := os.Create(filePath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not create file: %s", err)})
+		return
+	}
+	defer file.Close()
+
+	// 响应文件创建成功的信息
+	c.JSON(http.StatusOK, gin.H{"message": "File created successfully", "filePath": filePath})
 }
 
 // handleListFiles 处理 /list-files 路由的请求
