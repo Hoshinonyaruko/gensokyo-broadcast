@@ -66,8 +66,10 @@ async function sendRequest() {
   const url = `/webui/api/run?${queryString}`;
 
   try {
-    const response = await axios.get(url);
-    console.log('Request was successful');
+    const response = await axios.get(url, {
+      withCredentials: true // 确保请求与当前域关联，携带cookie
+    });
+    console.log('Request was successful', response.data);
   } catch (error) {
     console.error('Error during the API request:', error);
   }

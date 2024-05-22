@@ -178,6 +178,21 @@ func HandleCheckLoginStatusRequest(c *gin.Context) {
 
 // handleRunCommand 处理 /run 路由的请求
 func handleRunCommand(c *gin.Context) {
+
+	// 从请求中获取cookie
+	cookieValue, err := c.Cookie("login_cookie")
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Cookie not provided"})
+		return
+	}
+
+	// 使用ValidateCookie函数验证cookie
+	isValid, err := ValidateCookie(cookieValue)
+	if err != nil || !isValid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid cookie"})
+		return
+	}
+
 	// 从请求中提取参数
 	params := c.Request.URL.Query()
 
@@ -201,7 +216,7 @@ func handleRunCommand(c *gin.Context) {
 	// 在Windows上启动新窗口来运行程序
 	cmdLine := fmt.Sprintf("cmd.exe /c start %s %s", os.Args[0], strings.Join(args, " "))
 	cmd := exec.Command("cmd.exe", "/c", cmdLine)
-	err := cmd.Start()
+	err = cmd.Start()
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

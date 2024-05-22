@@ -5,6 +5,10 @@
 
 请确保在实际应用中，对所有参数值进行urlencode以避免URL解析错误。
 
+请求需要携带cookie,可从浏览器f12获取.token有效期1个月.文末有cookie获取和设置教程.
+
+如果不提供cookie参数,将会得到{"error":"Unauthorized: Cookie not provided"}报错.
+
 ## 参数
 
 ### `-a` (HTTP API 的地址)
@@ -74,3 +78,47 @@
 
 ```bash
 curl "http://localhost:60123/run?p=group_list&w=这是一条消息&d=15&a=http://example.com&c=80&s=savepath&g=true&f=true&t=your_token&r=true"
+```
+
+### 获取Cookie
+
+1. 打开浏览器，导航到您的网站。
+2. 使用F12键打开开发者工具。
+3. 切换到“网络(Network)”标签页。
+4. 在网站上触发一个请求（比如登录或加载页面）。
+5. 查看网络请求列表，找到任一已发送的请求，点击它。
+6. 在请求详情中找到“请求头(Request Headers)”部分，复制`Cookie`字段的内容。
+
+### Python API调用示例
+
+这个示例展示了如何使用Python `requests`库发送一个带有cookie的HTTP GET请求：
+
+```python
+import requests
+
+# API的URL
+url = 'https://example.com/api/run'
+
+# 需要发送的参数
+params = {
+    'a': 'http://127.0.0.1:42001',
+    'p': '1716208337-5月20日babyq2',
+    'w': 'baby.txt',
+    'd': '10',
+    'c': '100',
+    's': '5月20日babyq2',
+    'g': 'true',
+    't': 'xyy520499'
+}
+
+# 从浏览器获取的cookie字符串
+cookies = {
+    'session_token': 'your_copied_cookie_here'  # 替换成从浏览器复制的cookie值
+}
+
+# 发送请求
+response = requests.get(url, params=params, cookies=cookies)
+
+# 输出响应内容
+print(response.text)
+```
