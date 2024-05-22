@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/hoshinonyaruko/gensokyo-dashboard/config"
+	"github.com/hoshinonyaruko/gensokyo-broadcast/config"
 )
 
 // UnixRestarter implements the Restarter interface for Unix-like systems.
