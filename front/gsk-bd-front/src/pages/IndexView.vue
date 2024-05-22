@@ -11,11 +11,7 @@
       />
       <q-input filled v-model="params.a" label="HTTP API 地址 (-a)" />
       <q-select filled v-model="params.p" :options="textFiles" label="群列表文件名 (-p)" />
-      <q-row>
-        <q-col cols="12" md="8">
-          <q-input filled v-model="params.w" label="要发送的信息 (-w)" />
-        </q-col>
-      </q-row>
+      <q-select filled v-model="params.w" :options="textFiles" label="要发送的信息 (-w)" />
       <q-input filled type="number" v-model="params.d" label="信息推送时间间隔 (-d)" />
       <q-input filled type="number" v-model="params.c" label="每个群推送的概率 (-c)" />
       <q-toggle filled v-model="params.h" label="显示帮助信息 (-h)" />
@@ -23,8 +19,10 @@
       <q-toggle filled v-model="params.g" label="Gensokyo子频道过滤 (-g)" />
       <q-toggle filled v-model="params.f" label="私聊模式 (-f)" />
       <q-input filled v-model="params.t" label="Access Token (-t)" />
+      <q-input filled v-model="params.b" label="本次存档名(输入后点创建存档)然后在保存文件路径 (-s)选中" />
       <q-toggle filled v-model="params.r" label="打乱列表顺序 (-r)" />
       <q-btn label="发送请求" color="primary" @click="sendRequest" />
+      <q-btn label="创建存档" @click="createSave" color="primary" class="q-mt-md" />
     </div>
   </q-page>
 </template>
@@ -48,15 +46,32 @@ const params = ref({
   g: false,
   f: false,
   t: '',
-  r: false
+  r: false,
+  b: '',
 });
 
 async function sendRequest() {
-  // 在发送请求前处理p和s参数，移除.txt后缀
+ // 处理参数，确保所有值都是字符串
+ function processParams(params) {
+    const processed = {};
+    for (const key in params) {
+      const value = params[key];
+      // 检查值是否为对象并且含有 value 属性
+      if (value !== null && typeof value === 'object' && 'value' in value) {
+        processed[key] = value.value;
+      } else {
+        processed[key] = value;
+      }
+    }
+    return processed;
+  }
+
+  // 在发送请求前处理 params，移除 .txt 后缀
+  const cleanedParams = processParams(params.value);
   const processedParams = {
-    ...params.value,
-    p: params.value.p.replace(/\.txt$/, ''),
-    s: params.value.s.replace(/\.txt$/, '')
+    ...cleanedParams,
+    p: cleanedParams.p.replace(/\.txt$/, ''),
+    s: cleanedParams.s.replace(/\-save.txt$/, '').replace(/\.txt$/, '')
   };
 
   const queryString = Object.keys(processedParams)
@@ -78,9 +93,13 @@ async function sendRequest() {
 async function loadFileList() {
   try {
     const response = await axios.get('/webui/api/list-files');
+    // 添加一个空白选项至 textFiles 数组的开头
+    const emptyOption = { label: 'None', value: '' }; // 自定义空白选项的显示文本和值
+
     // 确保这里使用的是小写的 'filename' 和 'content'
-    textFiles.value = response.data.textFiles.map(file => ({label: file.filename, value: file.filename}));
-    batchFiles.value = response.data.batchFiles.map(file => ({label: file.filename, value: file.content}));
+    textFiles.value = [emptyOption, ...response.data.textFiles.map(file => ({ label: file.filename, value: file.filename }))];
+    batchFiles.value = response.data.batchFiles.map(file => ({ label: file.filename, value: file.content }));
+
     // 调试输出，查看加载的数据结构
     console.log('Loaded text files:', textFiles.value);
     console.log('Loaded batch files:', batchFiles.value);
@@ -118,6 +137,26 @@ function parseContent(content) {
     }
   }
 }
+
+// Method to call the API for creating a new save
+const createSave = async () => {
+  if (!params.value.b) {
+    console.error('存档文件名不能为空');
+    return; // Early return if the filename is empty
+  }
+  try {
+    const response = await axios.post('/webui/api/new-save', { filename: params.value.b });
+    console.log('存档创建成功:', response.data);
+    // 将新创建的文档名加入到textFiles中
+    const newFileName = `${params.value.b}-save.txt`;
+    textFiles.value.push({ label: newFileName, value: newFileName });
+    console.log('更新后的文件列表:', textFiles.value);
+    // 清空输入框
+    params.value.b = '';
+  } catch (error) {
+    console.error('存档创建失败:', error);
+  }
+};
 
 loadFileList();
 </script>
