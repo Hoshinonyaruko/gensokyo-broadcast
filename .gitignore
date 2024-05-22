@@ -1,5 +1,6 @@
 # botgo specific
 config.yml
+config.json
 *.db
 *.db.lock
 *.ini
@@ -21,3 +22,4 @@ webui/dist/
 
 #ignore data
 data/
+
